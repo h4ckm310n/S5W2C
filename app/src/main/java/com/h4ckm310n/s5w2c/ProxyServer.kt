@@ -106,7 +106,11 @@ object ProxyServer {
             }
             "IPV4" -> {
                 inputStream.read(buff, 0, 4)
-                domain = buff.copyOfRange(0, 4).joinToString(".")
+                val ipIntArray = IntArray(4)
+                for (i in 0..3) {
+                    ipIntArray[i] = buff[i].toInt() and 0xff
+                }
+                domain = ipIntArray.joinToString(".")
             }
             "IPV6" -> {
                 inputStream.read(buff, 0, 16)
