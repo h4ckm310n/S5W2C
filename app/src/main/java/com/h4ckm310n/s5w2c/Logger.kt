@@ -28,4 +28,10 @@ object Logger {
             items.add(LogItem(2, content))
         }
     }
+
+    fun clearLogs() {
+        MainScope().launch(Dispatchers.Main) {
+            items.clear()
+        }
+    }
 }
