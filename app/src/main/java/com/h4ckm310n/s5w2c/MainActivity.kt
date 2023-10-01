@@ -66,7 +66,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun enableService(context: Context) {
-        context.startService(Intent(context, ProxyService::class.java))
+        context.startForegroundService(Intent(context, ProxyService::class.java))
     }
 
     private fun disableService(context: Context) {
