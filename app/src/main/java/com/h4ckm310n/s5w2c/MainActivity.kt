@@ -51,6 +51,10 @@ class MainActivity : ComponentActivity() {
                         }) {
                             Text(text = if (enabled.value) "关闭" else "开启")
                         }
+                        Spacer(modifier = Modifier.padding(10.dp))
+                        Button(onClick = { Logger.clearLogs() }) {
+                            Text(text = "清空日志")
+                        }
                     }
 
                     Text(text = "运行日志")
