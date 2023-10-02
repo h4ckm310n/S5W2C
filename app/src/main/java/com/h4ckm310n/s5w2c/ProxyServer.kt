@@ -9,6 +9,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketException
 import kotlin.concurrent.thread
 
 object ProxyServer {
@@ -22,6 +23,8 @@ object ProxyServer {
 
     fun stopServer() {
         stopListen = true
+        if (!server!!.isClosed)
+            server!!.close()
     }
 
     // Server
@@ -31,13 +34,13 @@ object ProxyServer {
     private val ATYP = mapOf(0x01 to "IPV4", 0x03 to "DOMAIN", 0x04 to "IPV6")
 
     private const val FORWARD_BUFF_SIZE = 5 * 1024 * 1024
+    private var server: ServerSocket? = null
 
     @SuppressLint("StaticFieldLeak")
     var networkManager: NetworkManager? = null
     @OptIn(DelicateCoroutinesApi::class)
     fun listen() {
         stopListen = false
-        val server: ServerSocket?
         Logger.items.clear()
         try {
             networkManager!!.initNetwork()
@@ -49,7 +52,7 @@ object ProxyServer {
             while (!stopListen) {
                 if (networkManager!!.wifiNetwork == null || networkManager!!.cellularNetwork == null)
                     continue
-                client = server.accept()
+                client = server!!.accept()
                 Logger.log(client.toString())
                 GlobalScope.launch(Dispatchers.IO) {
                     try {
@@ -63,8 +66,13 @@ object ProxyServer {
                     }
                 }
             }
-            server.close()
+            server!!.close()
             Logger.log("Server closed")
+        } catch (e: SocketException) {
+            if (stopListen)
+                Logger.log("Server closed")
+            else
+                Logger.err("Server closed unexpectedly\n${e.stackTraceToString()}")
         } catch (e: Exception) {
             Logger.err("Server closed unexpectedly\n${e.stackTraceToString()}")
         }
