@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import java.net.Inet4Address
 
 class NetworkManager constructor(private val context: Context) {
     var wifiNetwork: Network? = null
@@ -18,10 +19,16 @@ class NetworkManager constructor(private val context: Context) {
             .build()
         val cellularRequest = NetworkRequest.Builder()
             .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
+
+        connectivityManager.requestNetwork(cellularRequest, object: ConnectivityManager.NetworkCallback() {})
 
         connectivityManager.registerNetworkCallback(wifiRequest, object: ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
+                connectivityManager.getLinkProperties(network)!!.linkAddresses.map {
+                    Logger.log("WiFi address: ${it.address.hostAddress!!}")
+                }
                 wifiNetwork = network
                 Logger.log("WiFi available")
             }
