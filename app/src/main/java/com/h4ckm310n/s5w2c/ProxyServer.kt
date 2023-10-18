@@ -47,14 +47,13 @@ object ProxyServer {
             networkManager!!.initNetwork()
 
             server = ServerSocket(PORT)
-            Logger.log(server.toString())
 
             var client: Socket?
             while (!stopListen) {
                 if (networkManager!!.wifiNetwork == null || networkManager!!.cellularNetwork == null)
                     continue
                 client = server!!.accept()
-                Logger.log(client.toString())
+                Logger.log("Client: ${client.inetAddress.hostAddress!!}:${client.port}")
                 GlobalScope.launch(Dispatchers.IO) {
                     try {
                         if (handshake(client))
