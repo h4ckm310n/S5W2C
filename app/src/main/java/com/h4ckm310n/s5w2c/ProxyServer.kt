@@ -1,12 +1,13 @@
 package com.h4ckm310n.s5w2c
 
 import android.annotation.SuppressLint
-import android.net.Network
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.InputStream
+import java.io.OutputStream
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
@@ -86,7 +87,9 @@ object ProxyServer {
         val version = buff[0]
         val nmethod = buff[1]
         if (version != 0x05.toByte() || nmethod < 1.toByte()) {
+            Logger.err("Invalid handshake: ${version.toInt()} ${nmethod.toInt()}")
             outputStream.write(byteArrayOf(0x05.toByte(), 0xff.toByte()))
+            outputStream.flush()
             return false
         }
         inputStream.read(buff, 0, nmethod.toInt())
@@ -97,7 +100,7 @@ object ProxyServer {
         return true
     }
 
-    private suspend fun handleRequest(client: Socket) {
+    private suspend fun handleRequest(client: Socket) = withContext(Dispatchers.IO) {
         val inputStream = client.getInputStream()
 
         val buff = ByteArray(255)
@@ -126,7 +129,7 @@ object ProxyServer {
             }
         }
         if (domain == "")
-            return
+            return@withContext
 
         inputStream.read(buff, 0, 2)
         val port = ((buff[0].toInt() and 0xff) shl 8) or (buff[1].toInt() and 0xff)
@@ -145,13 +148,35 @@ object ProxyServer {
     }
 
     @OptIn(DelicateCoroutinesApi::class)
-    private suspend fun handleConnect(client: Socket, domain: String, port: Int) {
+    private suspend fun handleConnect(client: Socket, domain: String, port: Int) = withContext(Dispatchers.IO) {
         fun sendConnectResponse(rep: Byte) {
             val outputStream = client.getOutputStream()
             val addrBytes = client.localAddress.address
             val portBytes = byteArrayOf(((PORT and 0xff00) shr 8).toByte(), (PORT and 0xff).toByte())
             outputStream.write(byteArrayOf(0x05.toByte(), rep, 0x00.toByte(), 0x01.toByte()) + addrBytes + portBytes)
             outputStream.flush()
+        }
+
+        fun forward(inputStream: InputStream, outputStream: OutputStream) {
+            var t = System.currentTimeMillis()
+            var n: Int
+            val buff = ByteArray(FORWARD_BUFF_SIZE)
+            while (true) {
+                try {
+                    n = inputStream.read(buff)
+                    if (n <= 0) {
+                        // Timeout
+                        if (System.currentTimeMillis() - t > 30000)
+                            break
+                        continue
+                    }
+                    outputStream.write(buff, 0, n)
+                    outputStream.flush()
+                    t = System.currentTimeMillis()
+                } catch (e: Exception) {
+                    break
+                }
+            }
         }
 
         Logger.log("Target: $domain:$port")
@@ -162,57 +187,19 @@ object ProxyServer {
         } catch (e: Exception) {
             sendConnectResponse(0x01.toByte())
             Logger.err("Failed to connect target\n${e.stackTraceToString()}")
-            return
+            return@withContext
         }
         sendConnectResponse(0x00.toByte())
 
         // Forward data
         try {
-            val buff = ByteArray(FORWARD_BUFF_SIZE)
             val clientInputStream = client.getInputStream()
             val clientOutputStream = client.getOutputStream()
             val targetInputStream = target.getInputStream()
             val targetOutputStream = target.getOutputStream()
 
-            var n: Int
-            var t1: Long
-            // Send response
-            val job = GlobalScope.launch(Dispatchers.IO) {
-                t1 = System.currentTimeMillis()
-                while (true) {
-                    try {
-                        n = targetInputStream.read(buff)
-                        if (n <= 0) {
-                            // Timeout
-                            if (System.currentTimeMillis() - t1 > 30000)
-                                break
-                            continue
-                        }
-                        clientOutputStream.write(buff, 0, n)
-                        clientOutputStream.flush()
-                    } catch (e: Exception) {
-                        break
-                    }
-                }
-            }
-
-            // Send request
-            t1 = System.currentTimeMillis()
-            while (true) {
-                try {
-                    n = clientInputStream.read(buff)
-                    if (n <= 0) {
-                        // Timeout
-                        if (System.currentTimeMillis() - t1 > 30000)
-                            break
-                        continue
-                    }
-                    targetOutputStream.write(buff, 0, n)
-                    targetOutputStream.flush()
-                } catch (e: Exception) {
-                    break
-                }
-            }
+            val job = GlobalScope.launch(Dispatchers.IO) { forward(clientInputStream, targetOutputStream) }
+            forward(targetInputStream, clientOutputStream)
             job.join()
 
         } catch (e: Exception) {
