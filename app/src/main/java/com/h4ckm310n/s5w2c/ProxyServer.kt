@@ -48,6 +48,19 @@ object ProxyServer {
     var networkManager: NetworkManager? = null
     @OptIn(DelicateCoroutinesApi::class)
     fun listen() {
+        fun handleClient(client: Socket) = GlobalScope.launch(Dispatchers.IO) {
+            Logger.log("Client: ${client.inetAddress.hostAddress!!}:${client.port}")
+            try {
+                if (handshake(client))
+                    handleRequest(client)
+                client.close()
+                Logger.log("Client closed")
+            } catch (e: Exception) {
+                client.close()
+                Logger.err("Client closed unexpectedly\n${e.stackTraceToString()}")
+            }
+        }
+
         stopListen = false
         Logger.items.clear()
         try {
@@ -61,18 +74,7 @@ object ProxyServer {
                 if (networkManager!!.wifiNetwork == null || networkManager!!.cellularNetwork == null)
                     continue
                 client = server!!.accept()
-                Logger.log("Client: ${client.inetAddress.hostAddress!!}:${client.port}")
-                GlobalScope.launch(Dispatchers.IO) {
-                    try {
-                        if (handshake(client))
-                            handleRequest(client)
-                        client.close()
-                        Logger.log("Client closed")
-                    } catch (e: Exception) {
-                        client.close()
-                        Logger.err("Client closed unexpectedly\n${e.stackTraceToString()}")
-                    }
-                }
+                handleClient(client)
             }
             server!!.close()
             Logger.log("Server closed")
