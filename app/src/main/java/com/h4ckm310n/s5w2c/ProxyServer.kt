@@ -88,75 +88,75 @@ object ProxyServer {
 
     @OptIn(DelicateCoroutinesApi::class)
     fun listenUDP() {
+        fun handleUDPRequest(client: DatagramPacket) = GlobalScope.launch(Dispatchers.IO) {
+            try {
+                var addr = ""
+                val buff = client.data
+                if (buff[2] != 0x00.toByte()) {
+                    Logger.err("UDP fragmentation not supported")
+                    return@launch
+                }
+
+                var offset = 0
+                when (ATYP[buff[3].toInt()]) {
+                    "DOMAIN" -> {
+                        val ndomain = buff[4].toInt()
+                        addr = String(buff.copyOfRange(5, 5 + ndomain))
+                        offset = 5 + ndomain
+                    }
+
+                    "IPV4" -> {
+                        val ipIntArray = IntArray(4)
+                        for (i in 4..7) {
+                            ipIntArray[i - 4] = buff[i].toInt() and 0xff
+                        }
+                        addr = ipIntArray.joinToString(".")
+                        offset = 8
+                    }
+
+                    "IPV6" -> {
+                        Logger.err("IPV6 not supported yet")
+                    }
+                }
+
+                if (addr == "" || offset == 0) {
+                    return@launch
+                }
+                val port =
+                    ((buff[offset].toInt() and 0xff) shl 8) or (buff[offset + 1].toInt() and 0xff)
+
+                offset += 2
+                val data = buff.copyOfRange(offset, client.length)
+
+                val target = DatagramSocket()
+                networkManager!!.cellularNetwork!!.bindSocket(target)
+                target.connect(InetSocketAddress(addr, port))
+
+                // Send to target
+                var packet = DatagramPacket(data, data.size, InetSocketAddress(addr, port))
+                target.send(packet)
+
+                // Send to client
+                val resp = buff.copyOfRange(0, offset)
+                packet = DatagramPacket(buff, FORWARD_BUFF_SIZE)
+                target.receive(packet)
+                client.data = resp + buff.copyOfRange(0, packet.length)
+                udpServer!!.send(client)
+            } catch (e: Exception) {
+                Logger.err("Failed to forward UDP packet\n${e.stackTraceToString()}")
+            }
+        }
+
         try {
             udpServer = DatagramSocket(PORT)
             var client: DatagramPacket?
-            var addr = ""
             while (!stopListen) {
                 if (networkManager!!.wifiNetwork == null || networkManager!!.cellularNetwork == null)
                     continue
                 val buff = ByteArray(FORWARD_BUFF_SIZE)
                 client = DatagramPacket(buff, FORWARD_BUFF_SIZE)
                 udpServer!!.receive(client)
-
-                GlobalScope.launch(Dispatchers.IO) inner@ {
-                    try {
-                        if (buff[2] != 0x00.toByte()) {
-                            Logger.err("UDP fragmentation not supported")
-                            return@inner
-                        }
-
-                        var offset = 0
-                        when (ATYP[buff[3].toInt()]) {
-                            "DOMAIN" -> {
-                                val ndomain = buff[4].toInt()
-                                addr = String(buff.copyOfRange(5, 5 + ndomain))
-                                offset = 5 + ndomain
-                            }
-
-                            "IPV4" -> {
-                                val ipIntArray = IntArray(4)
-                                for (i in 4..7) {
-                                    ipIntArray[i - 4] = buff[i].toInt() and 0xff
-                                }
-                                addr = ipIntArray.joinToString(".")
-                                offset = 8
-                            }
-
-                            "IPV6" -> {
-                                Logger.err("IPV6 not supported yet")
-                            }
-                        }
-
-                        if (addr == "" || offset == 0) {
-                            return@inner
-                        }
-                        val port =
-                            ((buff[offset].toInt() and 0xff) shl 8) or (buff[offset + 1].toInt() and 0xff)
-
-                        offset += 2
-                        val data = buff.copyOfRange(offset, client.length)
-                        Logger.log("UDP target: $addr:$port\n${String(buff.copyOfRange(0, client.length))}\ndata: ${String(data)}\n")
-
-                        val target = DatagramSocket()
-                        networkManager!!.cellularNetwork!!.bindSocket(target)
-                        target.connect(InetSocketAddress(addr, port))
-
-                        // Send to target
-                        var packet = DatagramPacket(data, data.size, InetSocketAddress(addr, port))
-                        target.send(packet)
-
-                        // Send to client
-                        val resp = buff.copyOfRange(0, offset)
-                        packet = DatagramPacket(buff, FORWARD_BUFF_SIZE)
-                        target.receive(packet)
-                        client.data = resp + buff.copyOfRange(0, packet.length)
-                        Logger.log("Resp: \n${String(client.data)}")
-                        udpServer!!.send(client)
-                    } catch (e: Exception) {
-                        Logger.err(e.stackTraceToString())
-                    }
-                }
+                handleUDPRequest(client)
             }
             udpServer!!.close()
         } catch (e: Exception) {
@@ -230,7 +230,7 @@ object ProxyServer {
                 Logger.err("BIND not supported yet")
             }
             "UDP" -> {
-                handleUDP(client, addr, port)
+                handleUDPAssociate(client, addr, port)
             }
         }
     }
@@ -298,7 +298,7 @@ object ProxyServer {
         }
     }
 
-    private suspend fun handleUDP(client: Socket, addr: String, port: Int) = withContext(Dispatchers.IO) {
+    private suspend fun handleUDPAssociate(client: Socket, addr: String, port: Int) = withContext(Dispatchers.IO) {
         fun sendUDPResponse() {
             val outputStream = client.getOutputStream()
             val addrBytes = client.localAddress.address
