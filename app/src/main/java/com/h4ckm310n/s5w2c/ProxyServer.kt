@@ -4,10 +4,14 @@ import android.annotation.SuppressLint
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
@@ -26,6 +30,8 @@ object ProxyServer {
         stopListen = true
         if (!server!!.isClosed)
             server!!.close()
+        if (!udpServer!!.isClosed)
+            udpServer!!.close()
     }
 
     // Server
@@ -36,6 +42,7 @@ object ProxyServer {
 
     private const val FORWARD_BUFF_SIZE = 5 * 1024 * 1024
     private var server: ServerSocket? = null
+    private var udpServer: DatagramSocket? = null
 
     @SuppressLint("StaticFieldLeak")
     var networkManager: NetworkManager? = null
@@ -47,6 +54,7 @@ object ProxyServer {
             networkManager!!.initNetwork()
 
             server = ServerSocket(PORT)
+            thread { listenUDP() }
 
             var client: Socket?
             while (!stopListen) {
@@ -78,6 +86,87 @@ object ProxyServer {
         }
     }
 
+    @OptIn(DelicateCoroutinesApi::class)
+    fun listenUDP() {
+        fun handleUDPRequest(client: DatagramPacket) = GlobalScope.launch(Dispatchers.IO) {
+            try {
+                var addr = ""
+                val buff = client.data
+                if (buff[2] != 0x00.toByte()) {
+                    Logger.err("UDP fragmentation not supported")
+                    return@launch
+                }
+
+                var offset = 0
+                when (ATYP[buff[3].toInt()]) {
+                    "DOMAIN" -> {
+                        val ndomain = buff[4].toInt()
+                        addr = String(buff.copyOfRange(5, 5 + ndomain))
+                        offset = 5 + ndomain
+                    }
+
+                    "IPV4" -> {
+                        val ipIntArray = IntArray(4)
+                        for (i in 4..7) {
+                            ipIntArray[i - 4] = buff[i].toInt() and 0xff
+                        }
+                        addr = ipIntArray.joinToString(".")
+                        offset = 8
+                    }
+
+                    "IPV6" -> {
+                        Logger.err("IPV6 not supported yet")
+                    }
+                }
+
+                if (addr == "" || offset == 0) {
+                    return@launch
+                }
+                val port =
+                    ((buff[offset].toInt() and 0xff) shl 8) or (buff[offset + 1].toInt() and 0xff)
+
+                offset += 2
+                val data = buff.copyOfRange(offset, client.length)
+
+                val target = DatagramSocket()
+                networkManager!!.cellularNetwork!!.bindSocket(target)
+                target.connect(InetSocketAddress(addr, port))
+
+                // Send to target
+                var packet = DatagramPacket(data, data.size, InetSocketAddress(addr, port))
+                target.send(packet)
+
+                // Send to client
+                val resp = buff.copyOfRange(0, offset)
+                packet = DatagramPacket(buff, FORWARD_BUFF_SIZE)
+                target.receive(packet)
+                client.data = resp + buff.copyOfRange(0, packet.length)
+                udpServer!!.send(client)
+            } catch (e: Exception) {
+                Logger.err("Failed to forward UDP packet\n${e.stackTraceToString()}")
+            }
+        }
+
+        try {
+            udpServer = DatagramSocket(PORT)
+            var client: DatagramPacket?
+            while (!stopListen) {
+                if (networkManager!!.wifiNetwork == null || networkManager!!.cellularNetwork == null)
+                    continue
+                val buff = ByteArray(FORWARD_BUFF_SIZE)
+                client = DatagramPacket(buff, FORWARD_BUFF_SIZE)
+                udpServer!!.receive(client)
+                handleUDPRequest(client)
+            }
+            udpServer!!.close()
+        } catch (e: Exception) {
+            if (stopListen)
+                Logger.log("UDP server closed")
+            else
+                Logger.err("UDP server closed unexpectedly\n${e.stackTraceToString()}")
+        }
+    }
+
     private fun handshake(client: Socket): Boolean {
         val inputStream = client.getInputStream()
         val outputStream = client.getOutputStream()
@@ -106,13 +195,13 @@ object ProxyServer {
         inputStream.read(buff, 0, 4)
         val cmd = buff[1]
         val type = buff[3]
-        var domain = ""
+        var addr = ""
         when (ATYP[type.toInt()]) {
             "DOMAIN" -> {
                 inputStream.read(buff, 0, 1)
                 val ndomain = buff[0].toInt()
                 inputStream.read(buff, 0, ndomain)
-                domain = String(buff.copyOfRange(0, ndomain))
+                addr = String(buff.copyOfRange(0, ndomain))
             }
             "IPV4" -> {
                 inputStream.read(buff, 0, 4)
@@ -120,14 +209,14 @@ object ProxyServer {
                 for (i in 0..3) {
                     ipIntArray[i] = buff[i].toInt() and 0xff
                 }
-                domain = ipIntArray.joinToString(".")
+                addr = ipIntArray.joinToString(".")
             }
             "IPV6" -> {
                 inputStream.read(buff, 0, 16)
                 Logger.err("IPV6 not supported yet")
             }
         }
-        if (domain == "")
+        if (addr == "")
             return@withContext
 
         inputStream.read(buff, 0, 2)
@@ -135,19 +224,19 @@ object ProxyServer {
 
         when (CMD[cmd.toInt()]) {
             "CONNECT" -> {
-                handleConnect(client, domain, port)
+                handleConnect(client, addr, port)
             }
             "BIND" -> {
                 Logger.err("BIND not supported yet")
             }
             "UDP" -> {
-                Logger.err("UDP not supported yet")
+                handleUDPAssociate(client, addr, port)
             }
         }
     }
 
     @OptIn(DelicateCoroutinesApi::class)
-    private suspend fun handleConnect(client: Socket, domain: String, port: Int) = withContext(Dispatchers.IO) {
+    private suspend fun handleConnect(client: Socket, addr: String, port: Int) = withContext(Dispatchers.IO) {
         fun sendConnectResponse(rep: Byte) {
             val outputStream = client.getOutputStream()
             val addrBytes = client.localAddress.address
@@ -178,11 +267,11 @@ object ProxyServer {
             }
         }
 
-        Logger.log("Target: $domain:$port")
+        Logger.log("Target: $addr:$port")
         // Connect to target
         val target: Socket?
         try {
-            target = networkManager!!.cellularNetwork!!.socketFactory.createSocket(domain, port)
+            target = networkManager!!.cellularNetwork!!.socketFactory.createSocket(addr, port)
         } catch (e: Exception) {
             sendConnectResponse(0x01.toByte())
             Logger.err("Failed to connect target\n${e.stackTraceToString()}")
@@ -205,8 +294,24 @@ object ProxyServer {
             Logger.err("Failed to forward\n${e.stackTraceToString()}")
         } finally {
             target.close()
-            Logger.log("$domain Target closed")
+            Logger.log("$addr Target closed")
         }
     }
 
+    private suspend fun handleUDPAssociate(client: Socket, addr: String, port: Int) = withContext(Dispatchers.IO) {
+        fun sendUDPResponse() {
+            val outputStream = client.getOutputStream()
+            val addrBytes = client.localAddress.address
+            val portBytes = byteArrayOf(((PORT and 0xff00) shr 8).toByte(), (PORT and 0xff).toByte())
+            outputStream.write(byteArrayOf(0x05.toByte(), 0x00.toByte(), 0x00.toByte(), 0x01.toByte()) + addrBytes + portBytes)
+            outputStream.flush()
+        }
+
+        if (addr != "0.0.0.0")
+            Logger.log("UDP Client: $addr:$port")
+        sendUDPResponse()
+
+        // Wait for UDP
+        delay(10000)
+    }
 }
