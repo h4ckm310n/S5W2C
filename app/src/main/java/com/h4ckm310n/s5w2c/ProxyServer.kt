@@ -35,12 +35,13 @@ object ProxyServer {
     }
 
     // Server
-    private const val PORT = 3111
+    private var PORT = (ConfigManager.getConfig("port") as String).toInt()
 
     private val CMD = mapOf(0x01 to "CONNECT", 0x02 to "BIND", 0x03 to "UDP")
     private val ATYP = mapOf(0x01 to "IPV4", 0x03 to "DOMAIN", 0x04 to "IPV6")
 
-    private const val FORWARD_BUFF_SIZE = 32 * 1024
+    private var FORWARD_BUFF_SIZE = (ConfigManager.getConfig("forward_buff_size") as String).toInt() * 1024
+    private var FORWARD_TIMEOUT = (ConfigManager.getConfig("timeout") as String).toInt() * 1000
     private var server: ServerSocket? = null
     private var udpServer: DatagramSocket? = null
 
@@ -256,7 +257,7 @@ object ProxyServer {
                     n = inputStream.read(buff)
                     if (n <= 0) {
                         // Timeout
-                        if (System.currentTimeMillis() - t > 10000)
+                        if (System.currentTimeMillis() - t > FORWARD_TIMEOUT)
                             break
                         continue
                     }
