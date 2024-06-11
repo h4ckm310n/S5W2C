@@ -18,8 +18,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.text.isDigitsOnly
 import com.h4ckm310n.s5w2c.ui.theme.S5W2CTheme
 import kotlinx.coroutines.runBlocking
@@ -48,6 +51,7 @@ class SettingsActivity : ComponentActivity() {
                     LazyColumn {
                         items(configs.size) {
                             SettingInputItem(configs[it])
+                            Spacer(modifier = Modifier.padding(10.dp))
                         }
                     }
                 }
@@ -59,17 +63,17 @@ class SettingsActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingInputItem(item: MutableState<SettingItem>) {
-    Row(modifier = Modifier.padding(10.dp)) {
-        Text(ConfigManager.getDisplayName(item.value.name))
-        Spacer(modifier = Modifier.padding(5.dp))
-        OutlinedTextField(
-            value = item.value.value as String,
-            onValueChange = { newValue ->
-                if (newValue.isDigitsOnly())
-                    item.value = item.value.copy(value=newValue)
-            },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            singleLine = true
-        )
-    }
+    OutlinedTextField(
+        label = {
+            Text(ConfigManager.getDisplayName(item.value.name), color=Color.Black, fontSize=15.sp)
+        },
+        value = item.value.value as String,
+        onValueChange = { newValue ->
+            if (newValue.isDigitsOnly())
+                item.value = item.value.copy(value=newValue)
+        },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        singleLine = true,
+        textStyle = TextStyle(color = Color.Black)
+    )
 }
