@@ -47,9 +47,8 @@ object ProxyServer {
 
     @SuppressLint("StaticFieldLeak")
     var networkManager: NetworkManager? = null
-    @OptIn(DelicateCoroutinesApi::class)
     fun listen() {
-        fun handleClient(client: Socket) = GlobalScope.launch(Dispatchers.IO) {
+        fun handleClient(client: Socket) {
             Logger.log("Client: ${client.inetAddress.hostAddress!!}:${client.port}")
             try {
                 if (handshake(client))
@@ -75,7 +74,7 @@ object ProxyServer {
                 if (networkManager!!.wifiNetwork == null || networkManager!!.cellularNetwork == null)
                     continue
                 client = server!!.accept()
-                handleClient(client)
+                thread { handleClient(client) }
             }
             server!!.close()
             Logger.log("Server closed")
@@ -89,15 +88,14 @@ object ProxyServer {
         }
     }
 
-    @OptIn(DelicateCoroutinesApi::class)
     fun listenUDP() {
-        fun handleUDPRequest(client: DatagramPacket) = GlobalScope.launch(Dispatchers.IO) {
+        fun handleUDPRequest(client: DatagramPacket) {
             try {
                 var addr = ""
                 val buff = client.data
                 if (buff[2] != 0x00.toByte()) {
                     Logger.err("UDP fragmentation not supported")
-                    return@launch
+                    return
                 }
 
                 var offset = 0
@@ -123,7 +121,7 @@ object ProxyServer {
                 }
 
                 if (addr == "" || offset == 0) {
-                    return@launch
+                    return
                 }
                 val port =
                     ((buff[offset].toInt() and 0xff) shl 8) or (buff[offset + 1].toInt() and 0xff)
@@ -159,7 +157,7 @@ object ProxyServer {
                 val buff = ByteArray(FORWARD_BUFF_SIZE)
                 client = DatagramPacket(buff, FORWARD_BUFF_SIZE)
                 udpServer!!.receive(client)
-                handleUDPRequest(client)
+                thread { handleUDPRequest(client) }
             }
             udpServer!!.close()
         } catch (e: Exception) {
@@ -191,7 +189,7 @@ object ProxyServer {
         return true
     }
 
-    private suspend fun handleRequest(client: Socket) = withContext(Dispatchers.IO) {
+    private fun handleRequest(client: Socket) {
         val inputStream = client.getInputStream()
 
         val buff = ByteArray(255)
@@ -220,7 +218,7 @@ object ProxyServer {
             }
         }
         if (addr == "")
-            return@withContext
+            return
 
         inputStream.read(buff, 0, 2)
         val port = ((buff[0].toInt() and 0xff) shl 8) or (buff[1].toInt() and 0xff)
@@ -238,8 +236,7 @@ object ProxyServer {
         }
     }
 
-    @OptIn(DelicateCoroutinesApi::class)
-    private suspend fun handleConnect(client: Socket, addr: String, port: Int) = withContext(Dispatchers.IO) {
+    private fun handleConnect(client: Socket, addr: String, port: Int) {
         fun sendConnectResponse(rep: Byte) {
             val outputStream = client.getOutputStream()
             val addrBytes = client.localAddress.address
@@ -259,6 +256,7 @@ object ProxyServer {
                         // Timeout
                         if (System.currentTimeMillis() - t > FORWARD_TIMEOUT)
                             break
+                        Thread.sleep(1000)
                         continue
                     }
                     outputStream.write(buff, 0, n)
@@ -278,7 +276,7 @@ object ProxyServer {
         } catch (e: Exception) {
             sendConnectResponse(0x01.toByte())
             Logger.err("Failed to connect target\n${e.stackTraceToString()}")
-            return@withContext
+            return
         }
         sendConnectResponse(0x00.toByte())
 
@@ -289,7 +287,7 @@ object ProxyServer {
             val targetInputStream = target.getInputStream()
             val targetOutputStream = target.getOutputStream()
 
-            val job = GlobalScope.launch(Dispatchers.IO) { forward(clientInputStream, targetOutputStream) }
+            val job = thread { forward(clientInputStream, targetOutputStream) }
             forward(targetInputStream, clientOutputStream)
             job.join()
 
@@ -301,7 +299,7 @@ object ProxyServer {
         }
     }
 
-    private suspend fun handleUDPAssociate(client: Socket, addr: String, port: Int) = withContext(Dispatchers.IO) {
+    private fun handleUDPAssociate(client: Socket, addr: String, port: Int) {
         fun sendUDPResponse() {
             val outputStream = client.getOutputStream()
             val addrBytes = client.localAddress.address
@@ -315,6 +313,6 @@ object ProxyServer {
         sendUDPResponse()
 
         // Wait for UDP
-        delay(10000)
+        Thread.sleep(10000)
     }
 }
